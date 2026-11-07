@@ -92,12 +92,13 @@ export default function Home() {
       let category = 'spam';
       let score = 0;
 
-      if (pubkeyPushes >= 6 || hasMultisigLike) {
-        type = 'bpub_or_multisig';
+      // BPUB reveals: many inputs + large scripts / many pubkeys
+      if (vinCount >= 15 || pubkeyPushes >= 5 || hasMultisigLike) {
+        type = 'bpub_reveal_candidate';
         category = 'image_or_file';
-        score += 3;
+        score += 4;
       }
-      if (totalWitnessBytes > 1500 || maxWitnessItems > 4) {
+      if (totalWitnessBytes > 1200 || maxWitnessItems > 3) {
         type = type || 'large_witness';
         category = 'image_or_file';
         score += 2;
@@ -106,7 +107,7 @@ export default function Home() {
         type = type || 'op_drop';
         score += 1;
       }
-      if (size > 2000 || weight > 8000 || voutCount > 15 || vinCount > 25) {
+      if (size > 1800 || weight > 7000 || voutCount > 12) {
         type = type || 'large_tx';
         score += 1;
       }
@@ -132,7 +133,6 @@ export default function Home() {
     }
   };
 
-  // Escanea hacia atrás (de alto a bajo)
   const scanBackwards = async (fromHeight, count) => {
     const results = [];
     const end = Math.max(1, fromHeight - count + 1);
@@ -151,18 +151,18 @@ export default function Home() {
           const w = tx.weight || 0;
           const vin = tx.vin?.length || 0;
           const vout = tx.vout?.length || 0;
-          return s > 1000 || w > 4000 || vout > 6 || vin > 8;
+          return s > 800 || w > 3000 || vout > 5 || vin >= 12;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 50));
+          await new Promise(r => setTimeout(r, 40));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 60));
+      await new Promise(r => setTimeout(r, 50));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -178,7 +178,7 @@ export default function Home() {
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 20 bloques. ${results.length} hallazgos. Puedes continuar hacia atrás.`);
+      setProgress(`Escaneados últimos 20 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -198,7 +198,24 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Continuado 25 bloques más. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+25 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  const scanKnownSpam = async () => {
+    setLoading(true);
+    setError('');
+    setScanned([]);
+    try {
+      // Zona documentada del ataque BPUB (blog blake2bminer)
+      setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
+      const { results } = await scanBackwards(963400, 60);
+      setScanned(results);
+      await saveToHistory(results);
+      setProgress(`Zona conocida escaneada. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -212,8 +229,8 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 80) {
-      setError('Máximo 80 bloques');
+    if (end - start > 100) {
+      setError('Máximo 100 bloques');
       return;
     }
     setLoading(true);
@@ -231,15 +248,18 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Escaneo regresivo (hacia atrás). Puedes seguir pulsando para continuar más atrás. Historial compartido.</p>
+      <p>Escaneo regresivo. Incluye zona conocida del ataque BPUB (bloque ~963343).</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Empezar desde el tip (20 bloques)
+          Empezar desde el tip (20)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Continuar hacia atrás (+25)
+        </button>
+        <button onClick={scanKnownSpam} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
+          Zona conocida de spam (~963343)
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -249,13 +269,13 @@ export default function Home() {
           </button>
         </div>
         {progress && <div style={{ marginTop: '10px', fontSize: '0.9em' }}>{progress}</div>}
-        {lowestScanned && <div style={{ marginTop: '6px', fontSize: '0.8em', color: '#666' }}>Último bloque escaneado: {lowestScanned + 1}</div>}
+        {lowestScanned && <div style={{ marginTop: '6px', fontSize: '0.8em', color: '#666' }}>Último bloque: {lowestScanned + 1}</div>}
       </div>
 
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Empieza el escaneo.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba la zona conocida o empieza desde el tip.</p>}
       <SpamList items={scanned} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
@@ -272,7 +292,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Escaneo hacia atrás. Puedes seguir pulsando “Continuar hacia atrás”. Enlaces a Kilombino y mempool.guide.
+        Fuente de la zona conocida: blog.blake2bminer.com. Detección mejorada para reveals con muchos inputs.
       </p>
     </div>
   );
