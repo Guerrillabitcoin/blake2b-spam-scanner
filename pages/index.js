@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'https://mempool.guide/api';
 
-// Simple in-memory cache for extracted previews
 const previewCache = new Map();
 
 export default function Home() {
@@ -162,14 +161,80 @@ export default function Home() {
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 30));
+          await new Promise(r => setTimeout(r, 25));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 40));
+      await new Promise(r => setTimeout(r, 30));
     }
     return { results, nextFrom: end - 1 };
+  };
+
+  const scanAlphaPoolLike = async () => {
+    setLoading(true);
+    setError('');
+    setScanned([]);
+    try {
+      if (!tipRef.current) await fetchRecentBlocks();
+      const tip = tipRef.current;
+      setProgress('Buscando bloques de pools que aceptan spam (AlphaPool y similares)...');
+      const results = [];
+      // Scan last ~80 blocks looking for AlphaPool-style coinbase
+      for (let h = tip; h > tip - 80 && h > 961640; h--) {
+        setProgress(`Revisando bloque ${h} para pools...`);
+        try {
+          const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
+          const hash = (await blockRes.text()).trim();
+          if (!hash || hash.length < 64) continue;
+          const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
+          const txs = await txsRes.json();
+          if (!txs || !txs.length) continue;
+          const coinbase = txs[0];
+          const coinbaseHex = coinbase.vin?.[0]?.scriptsig || '';
+          const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
+          const isAlpha = coinbaseAsm.includes('AlphaPool') || coinbaseHex.toLowerCase().includes('alphapool');
+          if (isAlpha) {
+            // Scan this block for spam candidates
+            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1000);
+            for (const tx of candidates) {
+              const analyzed = await analyzeTx(tx.txid, h);
+              if (analyzed) {
+                analyzed.pool = 'AlphaPool';
+                results.push(analyzed);
+              }
+            }
+          }
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 40));
+      }
+      setScanned(results);
+      await saveToHistory(results);
+      setProgress(`Bloques de pools revisados. ${results.length} hallazgos.`);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  const randomScan = async () => {
+    setLoading(true);
+    setError('');
+    setScanned([]);
+    try {
+      if (!tipRef.current) await fetchRecentBlocks();
+      const tip = tipRef.current;
+      const range = 40 + Math.floor(Math.random() * 60);
+      const start = tip - Math.floor(Math.random() * 200) - range;
+      setProgress(`Escaneo aleatorio: ${range} bloques desde ~${start}...`);
+      const { results } = await scanBackwards(start + range, range);
+      setScanned(results);
+      await saveToHistory(results);
+      setProgress(`Aleatorio terminado. ${results.length} hallazgos.`);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
   };
 
   const startScan = async () => {
@@ -179,11 +244,11 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const { results, nextFrom } = await scanBackwards(tip, 20);
+      const { results, nextFrom } = await scanBackwards(tip, 30);
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 20 bloques. ${results.length} hallazgos.`);
+      setProgress(`Escaneados últimos 30 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -195,7 +260,7 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const { results, nextFrom } = await scanBackwards(lowestScanned, 25);
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 40);
       setScanned(prev => {
         const existing = new Set(prev.map(i => i.txid));
         const fresh = results.filter(r => !existing.has(r.txid));
@@ -203,7 +268,7 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`+25 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+40 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
     } catch (e) {
       setError(e.message);
     }
@@ -216,7 +281,7 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
-      const { results } = await scanBackwards(963400, 60);
+      const { results } = await scanBackwards(963450, 80);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Zona conocida escaneada. ${results.length} hallazgos.`);
@@ -233,8 +298,8 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 100) {
-      setError('Máximo 100 bloques');
+    if (end - start > 200) {
+      setError('Máximo 200 bloques');
       return;
     }
     setLoading(true);
@@ -252,24 +317,30 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Escaneo regresivo + extracción automática de BPUB. Previsualizaciones rápidas.</p>
+      <p>Rangos más altos, aleatorios y bloques de pools que aceptan spam. Lo visual extraído se guarda en historial.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Empezar desde el tip (20)
+          Empezar desde el tip (30)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Continuar hacia atrás (+25)
+          Continuar hacia atrás (+40)
+        </button>
+        <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Escaneo aleatorio
         </button>
         <button onClick={scanKnownSpam} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
-          Zona conocida de spam (~963343)
+          Zona conocida (~963343)
+        </button>
+        <button onClick={scanAlphaPoolLike} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#fff3e0' }}>
+          Bloques AlphaPool / pools
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
           <input type="number" placeholder="Altura fin" value={endHeight} onChange={e => setEndHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
           <button onClick={handleScan} disabled={loading} style={{ padding: '8px 16px' }}>
-            Escanear rango
+            Escanear rango (hasta 200)
           </button>
         </div>
         {progress && <div style={{ marginTop: '10px', fontSize: '0.9em' }}>{progress}</div>}
@@ -279,12 +350,12 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba la zona conocida o empieza desde el tip.</p>}
-      <SpamList items={scanned} />
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba zona conocida, aleatorio o AlphaPool.</p>}
+      <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
       {history.length === 0 && <p>El historial está vacío.</p>}
-      <SpamList items={history} />
+      <SpamList items={history} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Últimos bloques</h2>
       <ul>
@@ -296,13 +367,13 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Candidatos fuertes se extraen automáticamente. Cache local para más velocidad.
+        Cuando extraes algo visual se guarda automáticamente en el historial compartido.
       </p>
     </div>
   );
 }
 
-function SpamList({ items }) {
+function SpamList({ items, onVisualFound }) {
   if (!items.length) return null;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
@@ -312,6 +383,7 @@ function SpamList({ items }) {
             Bloque {item.height} — {item.type}
             {item.category === 'image_or_file' && <span style={{ color: '#c00', marginLeft: '6px' }}>(posible media)</span>}
             {item.strong && <span style={{ color: '#0a0', marginLeft: '6px', fontSize: '0.8em' }}>★</span>}
+            {item.pool && <span style={{ color: '#f60', marginLeft: '6px', fontSize: '0.75em' }}>{item.pool}</span>}
           </div>
           <div style={{ fontSize: '0.82em', wordBreak: 'break-all', marginBottom: '6px' }}>
             TX: {item.txid}
@@ -330,18 +402,19 @@ function SpamList({ items }) {
               mempool.guide
             </a>
           </div>
-          <Preview txid={item.txid} strong={item.strong} />
+          <Preview txid={item.txid} strong={item.strong} item={item} onVisualFound={onVisualFound} />
         </div>
       ))}
     </div>
   );
 }
 
-function Preview({ txid, strong }) {
+function Preview({ txid, strong, item, onVisualFound }) {
   const [status, setStatus] = useState('idle');
   const [url, setUrl] = useState(null);
   const [meta, setMeta] = useState(null);
   const [blur, setBlur] = useState(true);
+  const savedRef = useRef(false);
 
   useEffect(() => {
     if (strong) {
@@ -354,7 +427,11 @@ function Preview({ txid, strong }) {
       const cached = previewCache.get(txid);
       setUrl(cached.url);
       setMeta(cached.meta);
-      setStatus('ok');
+      setStatus(cached.url ? 'ok' : 'no-content');
+      if (cached.url && onVisualFound && !savedRef.current) {
+        savedRef.current = true;
+        onVisualFound([{ ...item, visual: true, mime: cached.meta?.mime, filename: cached.meta?.filename }]);
+      }
       return;
     }
     setStatus('loading');
@@ -374,6 +451,10 @@ function Preview({ txid, strong }) {
       setUrl(objectUrl);
       setMeta(result.meta);
       setStatus('ok');
+      if (onVisualFound && !savedRef.current && (mime.startsWith('image/') || mime.startsWith('video/'))) {
+        savedRef.current = true;
+        onVisualFound([{ ...item, visual: true, mime, filename: result.meta?.filename }]);
+      }
     } catch (e) {
       console.warn(e);
       setStatus('error');
