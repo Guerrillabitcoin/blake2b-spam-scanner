@@ -4,6 +4,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  transpilePackages: ['@bitfiles/bpub'],
+  experimental: {
+    esmExternals: 'loose',
+  },
 };
 
 module.exports = nextConfig;
