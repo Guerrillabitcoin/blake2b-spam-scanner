@@ -92,7 +92,6 @@ export default function Home() {
       let category = 'spam';
       let score = 0;
 
-      // BPUB reveals: many inputs + large scripts / many pubkeys
       if (vinCount >= 15 || pubkeyPushes >= 5 || hasMultisigLike) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
@@ -210,7 +209,6 @@ export default function Home() {
     setError('');
     setScanned([]);
     try {
-      // Zona documentada del ataque BPUB (blog blake2bminer)
       setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
       const { results } = await scanBackwards(963400, 60);
       setScanned(results);
@@ -248,7 +246,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Escaneo regresivo. Incluye zona conocida del ataque BPUB (bloque ~963343).</p>
+      <p>Escaneo regresivo + extracción de BPUB en el navegador. Previsualizaciones directas.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -292,7 +290,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Fuente de la zona conocida: blog.blake2bminer.com. Detección mejorada para reveals con muchos inputs.
+        Previsualizaciones extraídas en el navegador con @bitfiles/bpub. NSFW se muestra borroso.
       </p>
     </div>
   );
@@ -324,31 +322,84 @@ function SpamList({ items }) {
             <a href={`https://mempool.guide/tx/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
               mempool.guide
             </a>
-            <a href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#888' }}>
-              bitfiles
-            </a>
           </div>
-          <a
-            href={`https://mempool.kilombino.com/tx/${item.txid}`}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              marginTop: '10px',
-              height: '80px',
-              background: '#f0f0f0',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: '4px',
-              textDecoration: 'none',
-              color: '#333',
-              fontSize: '0.85em',
-            }}
-          >
-            Ver en explorer de Kilombino
-          </a>
+          <Preview txid={item.txid} category={item.category} />
         </div>
       ))}
+    </div>
+  );
+}
+
+function Preview({ txid, category }) {
+  const [status, setStatus] = useState('idle');
+  const [url, setUrl] = useState(null);
+  const [meta, setMeta] = useState(null);
+  const [blur, setBlur] = useState(true);
+
+  const extract = async () => {
+    setStatus('loading');
+    try {
+      const { recoverFromTxid } = await import('@bitfiles/bpub');
+      const result = await recoverFromTxid(txid, { chain: 'btcb2' });
+      if (!result || !result.content) {
+        setStatus('no-content');
+        return;
+      }
+      const mime = result.meta?.mime || 'application/octet-stream';
+      const blob = new Blob([result.content], { type: mime });
+      const objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+      setMeta(result.meta);
+      setStatus('ok');
+      // Simple NSFW heuristic: blur if large image or unknown
+      if (mime.startsWith('image/') && result.content.length > 50000) setBlur(true);
+    } catch (e) {
+      console.warn(e);
+      setStatus('error');
+    }
+  };
+
+  if (status === 'idle') {
+    return (
+      <button onClick={extract} style={{ marginTop: '10px', padding: '6px 10px', fontSize: '0.85em' }}>
+        Extraer previsualización
+      </button>
+    );
+  }
+  if (status === 'loading') return <div style={{ marginTop: '10px', fontSize: '0.85em' }}>Extrayendo...</div>;
+  if (status === 'error' || status === 'no-content') {
+    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>No se pudo extraer BPUB</div>;
+  }
+
+  const isImage = meta?.mime?.startsWith('image/');
+  const isVideo = meta?.mime?.startsWith('video/');
+
+  return (
+    <div style={{ marginTop: '10px' }}>
+      {meta?.filename && <div style={{ fontSize: '0.75em', marginBottom: '4px' }}>{meta.filename}</div>}
+      {isImage && (
+        <img
+          src={url}
+          alt="preview"
+          style={{
+            maxWidth: '100%',
+            maxHeight: '160px',
+            borderRadius: '4px',
+            filter: blur ? 'blur(12px)' : 'none',
+            cursor: 'pointer',
+          }}
+          onClick={() => setBlur(!blur)}
+        />
+      )}
+      {isVideo && (
+        <video src={url} controls style={{ maxWidth: '100%', maxHeight: '160px' }} />
+      )}
+      {!isImage && !isVideo && (
+        <a href={url} download={meta?.filename || 'file'} style={{ fontSize: '0.85em' }}>
+          Descargar archivo ({meta?.mime || 'unknown'})
+        </a>
+      )}
+      {blur && isImage && <div style={{ fontSize: '0.7em', color: '#888' }}>Click para desenfocar</div>}
     </div>
   );
 }
