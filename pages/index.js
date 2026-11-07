@@ -5,10 +5,8 @@ const API_BASE = 'https://mempool.guide/api';
 const previewCache = new Map();
 
 const KNOWN_TXIDS = [
-  { txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e', label: 'Sample oficial' },
-  { txid: 'cc3d2e62b3c81de7aa93757fe0a6a25c826483746cd232c26234f7d8af05309f', label: 'Whitepaper PDF' },
-  { txid: '184b36d61fa94f2abdfe4bb0201236ce7eab9c4206880a59195f8f62ce919189', label: 'Archivo grande' },
-  { txid: '18e195667353270576915a18324d3875fc92acd5600d5c7954b683c34dbd1b70', label: 'Otro archivo' },
+  { txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e', label: 'Sample oficial (funciona)' },
+  { txid: 'cc3d2e62b3c81de7aa93757fe0a6a25c826483746cd232c26234f7d8af05309f', label: 'Whitepaper PDF (308 inputs)' },
 ];
 
 export default function Home() {
@@ -106,18 +104,18 @@ export default function Home() {
       let score = 0;
       let strong = false;
 
-      if (pubkeyPushes >= 10 || (hasMultisigLike && pubkeyPushes >= 5) || multisigScripts >= 2) {
+      if (pubkeyPushes >= 8 || (hasMultisigLike && pubkeyPushes >= 4) || multisigScripts >= 2 || vinCount >= 20) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
         score += 5;
         strong = true;
-      } else if (vinCount >= 15 && totalWitnessBytes > 1500) {
+      } else if (vinCount >= 12 && totalWitnessBytes > 1000) {
         type = 'possible_bpub';
         category = 'image_or_file';
         score += 3;
         strong = true;
       }
-      if (totalWitnessBytes > 1200 || maxWitnessItems > 3) {
+      if (totalWitnessBytes > 1000 || maxWitnessItems > 3) {
         type = type || 'large_witness';
         category = 'image_or_file';
         score += 1;
@@ -126,7 +124,7 @@ export default function Home() {
         type = type || 'op_drop';
         score += 1;
       }
-      if (size > 2000 || weight > 8000) {
+      if (size > 1800 || weight > 7000) {
         type = type || 'large_tx';
         score += 1;
       }
@@ -169,18 +167,18 @@ export default function Home() {
         const candidates = (txs || []).filter(tx => {
           const s = tx.size || 0;
           const vin = tx.vin?.length || 0;
-          return s > 1000 || vin >= 12;
+          return s > 800 || vin >= 10;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 15));
+          await new Promise(r => setTimeout(r, 12));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise(r => setTimeout(r, 15));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -190,8 +188,8 @@ export default function Home() {
     setError('');
     setScanned([]);
     try {
-      setProgress('Escaneando período fuerte de spam (963343 – 970000, ~3 semanas)...');
-      const { results } = await scanBackwards(970000, 200);
+      setProgress('Escaneando período fuerte de spam (963343 – 970000)...');
+      const { results } = await scanBackwards(970000, 250);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Período fuerte escaneado. ${results.length} hallazgos.`);
@@ -216,7 +214,7 @@ export default function Home() {
       foundAt: Date.now(),
     }));
     setScanned(samples);
-    setProgress('Cargados txids históricos conocidos. Pulsa Extraer en cada uno.');
+    setProgress('Cargados txids conocidos. El primero debería extraerse solo.');
   };
 
   const scanAlphaPoolLike = async () => {
@@ -226,10 +224,10 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      setProgress('Buscando bloques de pools que aceptan spam (AlphaPool y similares)...');
+      setProgress('Buscando bloques de pools que aceptan spam...');
       const results = [];
-      for (let h = tip; h > tip - 100 && h > 961640; h--) {
-        setProgress(`Revisando bloque ${h} para pools...`);
+      for (let h = tip; h > tip - 120 && h > 961640; h--) {
+        setProgress(`Revisando bloque ${h}...`);
         try {
           const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
           const hash = (await blockRes.text()).trim();
@@ -241,7 +239,7 @@ export default function Home() {
           const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
           const isAlpha = coinbaseAsm.includes('AlphaPool') || (coinbase.vin?.[0]?.scriptsig || '').toLowerCase().includes('alphapool');
           if (isAlpha) {
-            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1500);
+            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 10 || (tx.size || 0) > 1200);
             for (const tx of candidates) {
               const analyzed = await analyzeTx(tx.txid, h);
               if (analyzed) {
@@ -251,7 +249,7 @@ export default function Home() {
             }
           }
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 30));
+        await new Promise(r => setTimeout(r, 25));
       }
       setScanned(results);
       await saveToHistory(results);
@@ -269,8 +267,8 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const range = 50 + Math.floor(Math.random() * 50);
-      const start = tip - Math.floor(Math.random() * 300) - range;
+      const range = 60 + Math.floor(Math.random() * 40);
+      const start = tip - Math.floor(Math.random() * 400) - range;
       setProgress(`Escaneo aleatorio: ${range} bloques desde ~${start}...`);
       const { results } = await scanBackwards(start + range, range);
       setScanned(results);
@@ -289,11 +287,11 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const { results, nextFrom } = await scanBackwards(tip, 40);
+      const { results, nextFrom } = await scanBackwards(tip, 50);
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 40 bloques. ${results.length} hallazgos.`);
+      setProgress(`Escaneados últimos 50 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -305,7 +303,7 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const { results, nextFrom } = await scanBackwards(lowestScanned, 50);
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 60);
       setScanned(prev => {
         const existing = new Set(prev.map(i => i.txid));
         const fresh = results.filter(r => !existing.has(r.txid));
@@ -313,7 +311,7 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`+50 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+60 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
     } catch (e) {
       setError(e.message);
     }
@@ -325,11 +323,11 @@ export default function Home() {
     setError('');
     setScanned([]);
     try {
-      setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
-      const { results } = await scanBackwards(963600, 150);
+      setProgress('Escaneando zona ~963343...');
+      const { results } = await scanBackwards(963700, 180);
       setScanned(results);
       await saveToHistory(results);
-      setProgress(`Zona conocida escaneada. ${results.length} hallazgos.`);
+      setProgress(`Zona escaneada. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -362,7 +360,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Período fuerte de spam: bloques 963343–970000 (septiembre 2026). Mitad de cada bloque era un archivo BPUB.</p>
+      <p>Solo el sample oficial extrae por ahora. Los demás candidatos suelen no ser BPUB reales.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -370,42 +368,42 @@ export default function Home() {
           Cargar txids conocidos
         </button>
         <button onClick={scanHeavySpamPeriod} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
-          Período fuerte (963343–970000)
+          Período fuerte (250 bloques)
         </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Empezar desde el tip (40)
+          Desde el tip (50)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Continuar hacia atrás (+50)
+          Continuar atrás (+60)
         </button>
         <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Escaneo aleatorio
+          Aleatorio
         </button>
         <button onClick={scanKnownSpam} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Zona ~963343
         </button>
         <button onClick={scanAlphaPoolLike} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#fff3e0' }}>
-          Bloques AlphaPool
+          AlphaPool
         </button>
         <div style={{ marginTop: '12px' }}>
-          <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
-          <input type="number" placeholder="Altura fin" value={endHeight} onChange={e => setEndHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
+          <input type="number" placeholder="Inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '110px' }} />
+          <input type="number" placeholder="Fin" value={endHeight} onChange={e => setEndHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '110px' }} />
           <button onClick={handleScan} disabled={loading} style={{ padding: '8px 16px' }}>
-            Escanear rango (hasta 200)
+            Rango (máx 200)
           </button>
         </div>
         {progress && <div style={{ marginTop: '10px', fontSize: '0.9em' }}>{progress}</div>}
-        {lowestScanned && <div style={{ marginTop: '6px', fontSize: '0.8em', color: '#666' }}>Último bloque: {lowestScanned + 1}</div>}
+        {lowestScanned && <div style={{ marginTop: '6px', fontSize: '0.8em', color: '#666' }}>Último: {lowestScanned + 1}</div>}
       </div>
 
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
-      <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba “Cargar txids conocidos” o “Período fuerte”.</p>}
+      <h2>Resultados ({scanned.length})</h2>
+      {scanned.length === 0 && !loading && <p>Nada. Prueba “Cargar txids conocidos” primero.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
-      <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
-      {history.length === 0 && <p>El historial está vacío.</p>}
+      <h2 style={{ marginTop: '40px' }}>Historial ({history.length})</h2>
+      {history.length === 0 && <p>Vacío.</p>}
       <SpamList items={history} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Últimos bloques</h2>
@@ -418,7 +416,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Período fuerte: septiembre 2026, bloques 963343–970000. Mitad de cada bloque era un archivo BPUB.
+        Si al extraer no sale imagen, el error se muestra debajo del botón. Solo BPUB reales extraen.
       </p>
     </div>
   );
@@ -432,7 +430,6 @@ function SpamList({ items, onVisualFound }) {
         <div key={item.txid + i} style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '12px', background: '#fff' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>
             Bloque {item.height} — {item.type}
-            {item.category === 'image_or_file' && <span style={{ color: '#c00', marginLeft: '6px' }}>(posible media)</span>}
             {item.strong && <span style={{ color: '#0a0', marginLeft: '6px', fontSize: '0.8em' }}>★</span>}
             {item.pool && <span style={{ color: '#f60', marginLeft: '6px', fontSize: '0.75em' }}>{item.pool}</span>}
           </div>
@@ -480,6 +477,7 @@ function Preview({ txid, strong, item, onVisualFound }) {
       setUrl(cached.url);
       setMeta(cached.meta);
       setStatus(cached.url ? 'ok' : 'no-content');
+      setErrMsg(cached.err || '');
       if (cached.url && onVisualFound && !savedRef.current) {
         savedRef.current = true;
         onVisualFound([{ ...item, visual: true, mime: cached.meta?.mime, filename: cached.meta?.filename }]);
@@ -490,7 +488,7 @@ function Preview({ txid, strong, item, onVisualFound }) {
     setErrMsg('');
     try {
       const hexRes = await fetch(`${API_BASE}/tx/${txid}/hex`);
-      if (!hexRes.ok) throw new Error('No se pudo obtener el hex');
+      if (!hexRes.ok) throw new Error('No se pudo obtener el hex (' + hexRes.status + ')');
       const rawHex = (await hexRes.text()).trim();
       if (!rawHex || rawHex.length < 100) throw new Error('Hex inválido');
 
@@ -498,7 +496,8 @@ function Preview({ txid, strong, item, onVisualFound }) {
       const result = await recoverFromRawTransaction(rawHex);
       if (!result || !result.content) {
         setStatus('no-content');
-        previewCache.set(txid, { url: null, meta: null });
+        setErrMsg('La librería no encontró contenido BPUB');
+        previewCache.set(txid, { url: null, meta: null, err: 'no content' });
         return;
       }
       const mime = result.meta?.mime || 'application/octet-stream';
@@ -515,9 +514,10 @@ function Preview({ txid, strong, item, onVisualFound }) {
       }
     } catch (e) {
       console.warn(e);
-      setErrMsg(e.message || 'Error');
+      const msg = e.message || String(e);
+      setErrMsg(msg);
       setStatus('error');
-      previewCache.set(txid, { url: null, meta: null });
+      previewCache.set(txid, { url: null, meta: null, err: msg });
     }
   };
 
@@ -530,7 +530,11 @@ function Preview({ txid, strong, item, onVisualFound }) {
   }
   if (status === 'loading') return <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>Extrayendo...</div>;
   if (status === 'error' || status === 'no-content') {
-    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>{errMsg || 'No es BPUB o no se pudo extraer'}</div>;
+    return (
+      <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#c00' }}>
+        {errMsg || 'No es BPUB o no se pudo extraer'}
+      </div>
+    );
   }
 
   const isImage = meta?.mime?.startsWith('image/');
