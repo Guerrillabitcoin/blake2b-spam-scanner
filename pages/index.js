@@ -70,6 +70,7 @@ export default function Home() {
       let hasMultisigLike = false;
       let pubkeyPushes = 0;
       let hasOpDrop = false;
+      let multisigScripts = 0;
 
       for (const vin of tx.vin || []) {
         if (vin.witness && Array.isArray(vin.witness)) {
@@ -79,7 +80,10 @@ export default function Home() {
           }
         }
         const asm = (vin.inner_witnessscript_asm || vin.scriptsig_asm || '') + '';
-        if (asm.includes('OP_CHECKMULTISIG') || asm.includes('OP_CHECKMULTISIGVERIFY')) hasMultisigLike = true;
+        if (asm.includes('OP_CHECKMULTISIG') || asm.includes('OP_CHECKMULTISIGVERIFY')) {
+          hasMultisigLike = true;
+          multisigScripts++;
+        }
         if (asm.includes('OP_DROP')) hasOpDrop = true;
         const matches = asm.match(/OP_PUSHBYTES_33/g);
         if (matches) pubkeyPushes += matches.length;
@@ -95,27 +99,33 @@ export default function Home() {
       let score = 0;
       let strong = false;
 
-      if (vinCount >= 15 || pubkeyPushes >= 5 || hasMultisigLike) {
+      // Stricter: real BPUB reveals have many fake 33-byte pubkeys in multisig scripts
+      if (pubkeyPushes >= 12 || (hasMultisigLike && pubkeyPushes >= 6) || multisigScripts >= 3) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
-        score += 4;
+        score += 5;
+        strong = true;
+      } else if (vinCount >= 18 && totalWitnessBytes > 2000) {
+        type = 'possible_bpub';
+        category = 'image_or_file';
+        score += 3;
         strong = true;
       }
-      if (totalWitnessBytes > 1200 || maxWitnessItems > 3) {
+      if (totalWitnessBytes > 1500 || maxWitnessItems > 4) {
         type = type || 'large_witness';
         category = 'image_or_file';
-        score += 2;
+        score += 1;
       }
       if (hasOpDrop) {
         type = type || 'op_drop';
         score += 1;
       }
-      if (size > 1800 || weight > 7000 || voutCount > 12) {
+      if (size > 2500 || weight > 9000) {
         type = type || 'large_tx';
         score += 1;
       }
 
-      if (score >= 2 || type) {
+      if (score >= 3 || type) {
         return {
           height,
           txid,
@@ -152,21 +162,19 @@ export default function Home() {
 
         const candidates = (txs || []).filter(tx => {
           const s = tx.size || 0;
-          const w = tx.weight || 0;
           const vin = tx.vin?.length || 0;
-          const vout = tx.vout?.length || 0;
-          return s > 800 || w > 3000 || vout > 5 || vin >= 12;
+          return s > 1200 || vin >= 14;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 25));
+          await new Promise(r => setTimeout(r, 20));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 30));
+      await new Promise(r => setTimeout(r, 25));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -180,7 +188,7 @@ export default function Home() {
       const tip = tipRef.current;
       setProgress('Buscando bloques de pools que aceptan spam (AlphaPool y similares)...');
       const results = [];
-      for (let h = tip; h > tip - 80 && h > 961640; h--) {
+      for (let h = tip; h > tip - 100 && h > 961640; h--) {
         setProgress(`Revisando bloque ${h} para pools...`);
         try {
           const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
@@ -190,11 +198,10 @@ export default function Home() {
           const txs = await txsRes.json();
           if (!txs || !txs.length) continue;
           const coinbase = txs[0];
-          const coinbaseHex = coinbase.vin?.[0]?.scriptsig || '';
           const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
-          const isAlpha = coinbaseAsm.includes('AlphaPool') || coinbaseHex.toLowerCase().includes('alphapool');
+          const isAlpha = coinbaseAsm.includes('AlphaPool') || (coinbase.vin?.[0]?.scriptsig || '').toLowerCase().includes('alphapool');
           if (isAlpha) {
-            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1000);
+            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1500);
             for (const tx of candidates) {
               const analyzed = await analyzeTx(tx.txid, h);
               if (analyzed) {
@@ -204,7 +211,7 @@ export default function Home() {
             }
           }
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 40));
+        await new Promise(r => setTimeout(r, 30));
       }
       setScanned(results);
       await saveToHistory(results);
@@ -222,8 +229,8 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const range = 40 + Math.floor(Math.random() * 60);
-      const start = tip - Math.floor(Math.random() * 200) - range;
+      const range = 50 + Math.floor(Math.random() * 50);
+      const start = tip - Math.floor(Math.random() * 300) - range;
       setProgress(`Escaneo aleatorio: ${range} bloques desde ~${start}...`);
       const { results } = await scanBackwards(start + range, range);
       setScanned(results);
@@ -242,11 +249,11 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const { results, nextFrom } = await scanBackwards(tip, 30);
+      const { results, nextFrom } = await scanBackwards(tip, 40);
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 30 bloques. ${results.length} hallazgos.`);
+      setProgress(`Escaneados últimos 40 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -258,7 +265,7 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const { results, nextFrom } = await scanBackwards(lowestScanned, 40);
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 50);
       setScanned(prev => {
         const existing = new Set(prev.map(i => i.txid));
         const fresh = results.filter(r => !existing.has(r.txid));
@@ -266,7 +273,7 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`+40 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+50 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
     } catch (e) {
       setError(e.message);
     }
@@ -279,7 +286,7 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
-      const { results } = await scanBackwards(963450, 80);
+      const { results } = await scanBackwards(963500, 120);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Zona conocida escaneada. ${results.length} hallazgos.`);
@@ -318,10 +325,11 @@ export default function Home() {
       txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e',
       size: 0,
       weight: 0,
-      vin: 0,
+      vin: 26,
       vout: 0,
       type: 'sample_bpub',
       category: 'image_or_file',
+      pubkeyPushes: 99,
       strong: true,
       foundAt: Date.now(),
     };
@@ -332,7 +340,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Extracción corregida (fetch propio del hex). Prueba el botón de ejemplo.</p>
+      <p>Detección más estricta (muchos pubkeys falsos). El ejemplo funciona, ahora buscamos mejores candidatos.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -340,10 +348,10 @@ export default function Home() {
           Probar txid de ejemplo
         </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Empezar desde el tip (30)
+          Empezar desde el tip (40)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Continuar hacia atrás (+40)
+          Continuar hacia atrás (+50)
         </button>
         <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Escaneo aleatorio
@@ -368,7 +376,7 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba el txid de ejemplo o zona conocida.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba zona conocida o AlphaPool.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
@@ -385,7 +393,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Extracción usa hex propio de mempool.guide. Si el ejemplo funciona, el resto también.
+        Solo se marca como fuerte (★) si tiene muchos pubkeys falsos típicos de BPUB. El ejemplo funciona.
       </p>
     </div>
   );
@@ -456,7 +464,6 @@ function Preview({ txid, strong, item, onVisualFound }) {
     setStatus('loading');
     setErrMsg('');
     try {
-      // Fetch hex ourselves from mempool.guide
       const hexRes = await fetch(`${API_BASE}/tx/${txid}/hex`);
       if (!hexRes.ok) throw new Error('No se pudo obtener el hex');
       const rawHex = (await hexRes.text()).trim();
