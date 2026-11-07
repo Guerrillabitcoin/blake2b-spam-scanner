@@ -104,32 +104,32 @@ export default function Home() {
       let score = 0;
       let strong = false;
 
-      if (pubkeyPushes >= 8 || (hasMultisigLike && pubkeyPushes >= 4) || multisigScripts >= 2 || vinCount >= 20) {
+      // Much stricter: real BPUB has many fake 33-byte pubkeys in the witness scripts
+      if (pubkeyPushes >= 15 || (hasMultisigLike && pubkeyPushes >= 8)) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
-        score += 5;
+        score += 6;
         strong = true;
-      } else if (vinCount >= 12 && totalWitnessBytes > 1000) {
+      } else if (vinCount >= 25 && totalWitnessBytes > 3000) {
         type = 'possible_bpub';
         category = 'image_or_file';
-        score += 3;
+        score += 4;
         strong = true;
       }
-      if (totalWitnessBytes > 1000 || maxWitnessItems > 3) {
+      if (totalWitnessBytes > 2000) {
         type = type || 'large_witness';
-        category = 'image_or_file';
         score += 1;
       }
       if (hasOpDrop) {
         type = type || 'op_drop';
         score += 1;
       }
-      if (size > 1800 || weight > 7000) {
+      if (size > 3000) {
         type = type || 'large_tx';
         score += 1;
       }
 
-      if (score >= 2 || type) {
+      if (score >= 4 || strong) {
         return {
           height,
           txid,
@@ -164,21 +164,22 @@ export default function Home() {
         const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
         const txs = await txsRes.json();
 
+        // Only look at txs with many inputs or large size
         const candidates = (txs || []).filter(tx => {
           const s = tx.size || 0;
           const vin = tx.vin?.length || 0;
-          return s > 800 || vin >= 10;
+          return s > 1500 || vin >= 15;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 12));
+          await new Promise(r => setTimeout(r, 10));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 15));
+      await new Promise(r => setTimeout(r, 12));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -189,10 +190,10 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando período fuerte de spam (963343 – 970000)...');
-      const { results } = await scanBackwards(970000, 250);
+      const { results } = await scanBackwards(970000, 300);
       setScanned(results);
       await saveToHistory(results);
-      setProgress(`Período fuerte escaneado. ${results.length} hallazgos.`);
+      setProgress(`Período fuerte escaneado. ${results.length} hallazgos (solo candidatos fuertes).`);
     } catch (e) {
       setError(e.message);
     }
@@ -226,7 +227,7 @@ export default function Home() {
       const tip = tipRef.current;
       setProgress('Buscando bloques de pools que aceptan spam...');
       const results = [];
-      for (let h = tip; h > tip - 120 && h > 961640; h--) {
+      for (let h = tip; h > tip - 150 && h > 961640; h--) {
         setProgress(`Revisando bloque ${h}...`);
         try {
           const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
@@ -239,7 +240,7 @@ export default function Home() {
           const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
           const isAlpha = coinbaseAsm.includes('AlphaPool') || (coinbase.vin?.[0]?.scriptsig || '').toLowerCase().includes('alphapool');
           if (isAlpha) {
-            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 10 || (tx.size || 0) > 1200);
+            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 15 || (tx.size || 0) > 2000);
             for (const tx of candidates) {
               const analyzed = await analyzeTx(tx.txid, h);
               if (analyzed) {
@@ -249,7 +250,7 @@ export default function Home() {
             }
           }
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 25));
+        await new Promise(r => setTimeout(r, 20));
       }
       setScanned(results);
       await saveToHistory(results);
@@ -267,8 +268,8 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const range = 60 + Math.floor(Math.random() * 40);
-      const start = tip - Math.floor(Math.random() * 400) - range;
+      const range = 80 + Math.floor(Math.random() * 40);
+      const start = tip - Math.floor(Math.random() * 500) - range;
       setProgress(`Escaneo aleatorio: ${range} bloques desde ~${start}...`);
       const { results } = await scanBackwards(start + range, range);
       setScanned(results);
@@ -287,11 +288,11 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const { results, nextFrom } = await scanBackwards(tip, 50);
+      const { results, nextFrom } = await scanBackwards(tip, 60);
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 50 bloques. ${results.length} hallazgos.`);
+      setProgress(`Escaneados últimos 60 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -303,7 +304,7 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const { results, nextFrom } = await scanBackwards(lowestScanned, 60);
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 80);
       setScanned(prev => {
         const existing = new Set(prev.map(i => i.txid));
         const fresh = results.filter(r => !existing.has(r.txid));
@@ -311,7 +312,7 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`+60 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+80 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
     } catch (e) {
       setError(e.message);
     }
@@ -324,7 +325,7 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando zona ~963343...');
-      const { results } = await scanBackwards(963700, 180);
+      const { results } = await scanBackwards(963800, 200);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Zona escaneada. ${results.length} hallazgos.`);
@@ -360,7 +361,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Solo el sample oficial extrae por ahora. Los demás candidatos suelen no ser BPUB reales.</p>
+      <p>Detección mucho más estricta. Solo muestra candidatos con muchos pubkeys falsos (patrón real de BPUB).</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -368,13 +369,13 @@ export default function Home() {
           Cargar txids conocidos
         </button>
         <button onClick={scanHeavySpamPeriod} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
-          Período fuerte (250 bloques)
+          Período fuerte (300 bloques)
         </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Desde el tip (50)
+          Desde el tip (60)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Continuar atrás (+60)
+          Continuar atrás (+80)
         </button>
         <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Aleatorio
@@ -399,7 +400,7 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Nada. Prueba “Cargar txids conocidos” primero.</p>}
+      {scanned.length === 0 && !loading && <p>Nada. Prueba “Cargar txids conocidos” o “Período fuerte”.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial ({history.length})</h2>
@@ -416,7 +417,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Si al extraer no sale imagen, el error se muestra debajo del botón. Solo BPUB reales extraen.
+        Ahora solo muestra candidatos con muchos pubkeys falsos. El error “no BPUB-like” significa que no es un reveal real.
       </p>
     </div>
   );
