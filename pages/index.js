@@ -4,9 +4,38 @@ const API_BASE = 'https://mempool.guide/api';
 
 const previewCache = new Map();
 
+// Real BPUB files from https://bitfiles.io/btcb2
 const KNOWN_TXIDS = [
-  { txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e', label: 'Sample oficial (funciona)' },
-  { txid: 'cc3d2e62b3c81de7aa93757fe0a6a25c826483746cd232c26234f7d8af05309f', label: 'Whitepaper PDF (308 inputs)' },
+  { txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e', label: 'Sample oficial' },
+  { txid: '9f43eec7a3315e6eb8bd5a15ca8cb320fc8d8017110c54f99b63d5f5af9c8bb7', label: 'bitfiles gallery' },
+  { txid: 'd3260c6c05e1296fe823d4d4433fe5d4eb208cb771c17e24cb7b35b663e0633f', label: 'bitfiles gallery' },
+  { txid: 'bcea00d86baad286038c4b6b35879acf5cda93d7c19014ed8c5051985ab5f6f6', label: 'bitfiles gallery' },
+  { txid: '0178c1ffedf03a7d902c84aea163fbe75918bb6905712ac7dada14852f89a584', label: 'bitfiles gallery' },
+  { txid: '01fc7b8c89a95869a876996016f1bb6c6ae6a94ea2c9a6797462b7525bbaa7d6', label: 'bitfiles gallery' },
+  { txid: '034040ab2df1b6a1c42e6d6e0299e1b1aedd02654ce387ec179d79be73e199c4', label: 'bitfiles gallery' },
+  { txid: '0e497ab172666062b023f86d409cb1b64f5710cae5d93d275ac721f7ed737997', label: 'bitfiles gallery' },
+  { txid: '1b1e3f9468acdcdf3da067b7a5d2d8d5e9a7da4b3700d57eb4d64a0003510ae7', label: 'bitfiles gallery' },
+  { txid: '1b90bc3a850b9c2b7b65e37eaf6d073d15694f113bc91f8eea7e25411d2d57b5', label: 'bitfiles gallery' },
+  { txid: '206cc7539b3779d8c02e2b79e8eba659f6e4e950eacefed1c6522b62761f1201', label: 'bitfiles gallery' },
+  { txid: '2210ad26dfa56ae5559c59499a390ae8c441b7d67da15bb732ae9ac1ef209b2c', label: 'bitfiles gallery' },
+  { txid: '26ae69a8c7b4003365e4aead118df35595d9ab1eeadf297b1bc5e08d785790e1', label: 'bitfiles gallery' },
+  { txid: '39586643423531024a01ea5406a9da838aadff990d0626acbb784b4e43ad3ac9', label: 'bitfiles gallery' },
+  { txid: '5336c56dc1a57a36125dd2add5b84200f6690efa221610d4dc2c450e6de4d91a', label: 'bitfiles gallery' },
+  { txid: '53a9acb92012c25077e101a61d733c6c8e178dc3087ad29ed44ffa8f9e37cd8b', label: 'bitfiles gallery' },
+  { txid: '5862171249009749305c3af89887e23f9f7bb9b04f9eef63a7b65e905ba211d1', label: 'bitfiles gallery' },
+  { txid: '5ca36047381eecccba1e94486481d5e357bfc45d31badcbc03a8f54834341451', label: 'bitfiles gallery' },
+  { txid: '603a8c25dc32f199dddd3a7af0a826d602ad1e7953a79c94ebbc5b9fa274d4f1', label: 'bitfiles gallery' },
+  { txid: '6404c71d89b1c5d7562d06973f8f90b862196602239c41f9217884ff7d806fd5', label: 'bitfiles gallery' },
+  { txid: '6ed43d4cde5fb079baa5445a08c5272d22b78a31767c047d4650d43ff4911d11', label: 'bitfiles gallery' },
+  { txid: '790cfa0349385defd7b8c75cf3a7876c844c451b67f29391c17839b0234ddad7', label: 'bitfiles gallery' },
+  { txid: '7f624e31f37411da25ad86483ea8688326c1459cfd63cc653d4a11c4eeb665a4', label: 'bitfiles gallery' },
+  { txid: '8b103817004b4eb81ba912c78d23581fd8d3c9657482fe5cec882b45a30dd6ec', label: 'bitfiles gallery' },
+  { txid: '90010419766f1ca182e408a7009fba3dc842220dacf972e43e936fbeb4eb886b', label: 'bitfiles gallery' },
+  { txid: '90fa1b0d8a02d4b55e2749a6ca015d2fb811b6e0bed3e94cd192d65b5eca3d22', label: 'bitfiles gallery' },
+  { txid: '9606b02f5ac3f8f77bd606874b2369cd2d5cc8c923305e19c29c73e3249b016f', label: 'bitfiles gallery' },
+  { txid: '9714569a88f01b4b4b5cc539199e509ac20d292c151738a619f47aa23b564b3c', label: 'bitfiles gallery' },
+  { txid: '97797ff0e4a640ff13ee066f88b166a33b39618b84b4d45867130f6ca1c082ac', label: 'bitfiles gallery' },
+  { txid: '9ae6f01abb3bdbaf36d0d5b07863e0ec9d2a71f6cd2810d1cffe196c0350977e', label: 'bitfiles gallery' },
 ];
 
 export default function Home() {
@@ -111,7 +140,6 @@ export default function Home() {
         if (matches) pubkeyPushes += matches.length;
       }
 
-      // Skip if no witness at all
       if (!hasWitness) return null;
 
       const size = tx.size || 0;
@@ -218,14 +246,14 @@ export default function Home() {
       weight: 0,
       vin: 0,
       vout: 0,
-      type: 'known_' + k.label,
+      type: 'bitfiles_' + k.label,
       category: 'image_or_file',
       pubkeyPushes: 99,
       strong: true,
       foundAt: Date.now(),
     }));
     setScanned(samples);
-    setProgress('Cargados txids conocidos. El primero debería extraerse solo.');
+    setProgress(`Cargados ${samples.length} txids reales de bitfiles.io. Deberían extraerse.`);
   };
 
   const scanAlphaPoolLike = async () => {
@@ -371,12 +399,12 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Solo muestra transacciones con witness. El sample oficial es el único confirmado que extrae.</p>
+      <p>Galería de archivos BPUB reales de <a href="https://bitfiles.io/btcb2" target="_blank">bitfiles.io/btcb2</a></p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
         <button onClick={loadKnownTxids} style={{ padding: '8px 16px', marginRight: '8px', background: '#e0ffe0' }}>
-          Cargar txids conocidos
+          Cargar galería bitfiles (30)
         </button>
         <button onClick={scanHeavySpamPeriod} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
           Período fuerte (400 bloques)
@@ -413,7 +441,7 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Nada. Prueba “Cargar txids conocidos” o “Período fuerte”.</p>}
+      {scanned.length === 0 && !loading && <p>Nada. Pulsa “Cargar galería bitfiles” para ver archivos reales.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial ({history.length})</h2>
@@ -430,7 +458,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Solo transacciones con witness. El error “no witness data” significa que no es SegWit/BPUB.
+        Los txids de bitfiles.io son reveals BPUB reales. Deberían extraerse.
       </p>
     </div>
   );
@@ -462,6 +490,9 @@ function SpamList({ items, onVisualFound }) {
             </a>
             <a href={`https://mempool.guide/tx/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
               mempool.guide
+            </a>
+            <a href={`https://bitfiles.io/btcb2/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
+              bitfiles
             </a>
           </div>
           <Preview txid={item.txid} strong={item.strong} item={item} onVisualFound={onVisualFound} />
