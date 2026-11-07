@@ -26,6 +26,16 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Expected array' });
       }
 
+      // If empty array, clear history
+      if (newItems.length === 0) {
+        await put(BLOB_NAME, JSON.stringify([]), {
+          access: 'public',
+          contentType: 'application/json',
+          allowOverwrite: true,
+        });
+        return res.json({ cleared: true, total: 0 });
+      }
+
       // Load existing
       let existing = [];
       try {
