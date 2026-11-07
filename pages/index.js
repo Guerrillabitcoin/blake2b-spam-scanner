@@ -50,6 +50,21 @@ export default function Home() {
     }
   };
 
+  const clearHistory = async () => {
+    if (!confirm('Borrar todo el historial?')) return;
+    try {
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([]),
+      });
+      setHistory([]);
+      setProgress('Historial limpiado.');
+    } catch (e) {
+      setError('Error al limpiar: ' + e.message);
+    }
+  };
+
   const fetchRecentBlocks = async () => {
     try {
       const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
@@ -76,9 +91,11 @@ export default function Home() {
       let pubkeyPushes = 0;
       let hasOpDrop = false;
       let multisigScripts = 0;
+      let hasWitness = false;
 
       for (const vin of tx.vin || []) {
-        if (vin.witness && Array.isArray(vin.witness)) {
+        if (vin.witness && Array.isArray(vin.witness) && vin.witness.length > 0) {
+          hasWitness = true;
           maxWitnessItems = Math.max(maxWitnessItems, vin.witness.length);
           for (const w of vin.witness) {
             if (typeof w === 'string') totalWitnessBytes += w.length / 2;
@@ -94,6 +111,9 @@ export default function Home() {
         if (matches) pubkeyPushes += matches.length;
       }
 
+      // Skip if no witness at all
+      if (!hasWitness) return null;
+
       const size = tx.size || 0;
       const weight = tx.weight || 0;
       const vinCount = tx.vin?.length || 0;
@@ -104,28 +124,19 @@ export default function Home() {
       let score = 0;
       let strong = false;
 
-      // Much stricter: real BPUB has many fake 33-byte pubkeys in the witness scripts
-      if (pubkeyPushes >= 15 || (hasMultisigLike && pubkeyPushes >= 8)) {
+      if (pubkeyPushes >= 12 || (hasMultisigLike && pubkeyPushes >= 6)) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
         score += 6;
         strong = true;
-      } else if (vinCount >= 25 && totalWitnessBytes > 3000) {
+      } else if (vinCount >= 20 && totalWitnessBytes > 2500) {
         type = 'possible_bpub';
         category = 'image_or_file';
         score += 4;
         strong = true;
       }
-      if (totalWitnessBytes > 2000) {
+      if (totalWitnessBytes > 1500) {
         type = type || 'large_witness';
-        score += 1;
-      }
-      if (hasOpDrop) {
-        type = type || 'op_drop';
-        score += 1;
-      }
-      if (size > 3000) {
-        type = type || 'large_tx';
         score += 1;
       }
 
@@ -164,22 +175,21 @@ export default function Home() {
         const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
         const txs = await txsRes.json();
 
-        // Only look at txs with many inputs or large size
         const candidates = (txs || []).filter(tx => {
           const s = tx.size || 0;
           const vin = tx.vin?.length || 0;
-          return s > 1500 || vin >= 15;
+          return s > 1200 || vin >= 12;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 10));
+          await new Promise(r => setTimeout(r, 8));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 12));
+      await new Promise(r => setTimeout(r, 10));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -190,10 +200,10 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando período fuerte de spam (963343 – 970000)...');
-      const { results } = await scanBackwards(970000, 300);
+      const { results } = await scanBackwards(970000, 400);
       setScanned(results);
       await saveToHistory(results);
-      setProgress(`Período fuerte escaneado. ${results.length} hallazgos (solo candidatos fuertes).`);
+      setProgress(`Período fuerte escaneado. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -227,7 +237,7 @@ export default function Home() {
       const tip = tipRef.current;
       setProgress('Buscando bloques de pools que aceptan spam...');
       const results = [];
-      for (let h = tip; h > tip - 150 && h > 961640; h--) {
+      for (let h = tip; h > tip - 200 && h > 961640; h--) {
         setProgress(`Revisando bloque ${h}...`);
         try {
           const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
@@ -240,7 +250,7 @@ export default function Home() {
           const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
           const isAlpha = coinbaseAsm.includes('AlphaPool') || (coinbase.vin?.[0]?.scriptsig || '').toLowerCase().includes('alphapool');
           if (isAlpha) {
-            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 15 || (tx.size || 0) > 2000);
+            const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1500);
             for (const tx of candidates) {
               const analyzed = await analyzeTx(tx.txid, h);
               if (analyzed) {
@@ -250,7 +260,7 @@ export default function Home() {
             }
           }
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 20));
+        await new Promise(r => setTimeout(r, 15));
       }
       setScanned(results);
       await saveToHistory(results);
@@ -268,8 +278,8 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const range = 80 + Math.floor(Math.random() * 40);
-      const start = tip - Math.floor(Math.random() * 500) - range;
+      const range = 100 + Math.floor(Math.random() * 50);
+      const start = tip - Math.floor(Math.random() * 600) - range;
       setProgress(`Escaneo aleatorio: ${range} bloques desde ~${start}...`);
       const { results } = await scanBackwards(start + range, range);
       setScanned(results);
@@ -288,11 +298,11 @@ export default function Home() {
     try {
       if (!tipRef.current) await fetchRecentBlocks();
       const tip = tipRef.current;
-      const { results, nextFrom } = await scanBackwards(tip, 60);
+      const { results, nextFrom } = await scanBackwards(tip, 80);
       setScanned(results);
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`Escaneados últimos 60 bloques. ${results.length} hallazgos.`);
+      setProgress(`Escaneados últimos 80 bloques. ${results.length} hallazgos.`);
     } catch (e) {
       setError(e.message);
     }
@@ -304,7 +314,7 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const { results, nextFrom } = await scanBackwards(lowestScanned, 80);
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 100);
       setScanned(prev => {
         const existing = new Set(prev.map(i => i.txid));
         const fresh = results.filter(r => !existing.has(r.txid));
@@ -312,7 +322,7 @@ export default function Home() {
       });
       setLowestScanned(nextFrom);
       await saveToHistory(results);
-      setProgress(`+80 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+      setProgress(`+100 bloques. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
     } catch (e) {
       setError(e.message);
     }
@@ -325,7 +335,7 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando zona ~963343...');
-      const { results } = await scanBackwards(963800, 200);
+      const { results } = await scanBackwards(963900, 250);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Zona escaneada. ${results.length} hallazgos.`);
@@ -361,7 +371,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Detección mucho más estricta. Solo muestra candidatos con muchos pubkeys falsos (patrón real de BPUB).</p>
+      <p>Solo muestra transacciones con witness. El sample oficial es el único confirmado que extrae.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -369,13 +379,13 @@ export default function Home() {
           Cargar txids conocidos
         </button>
         <button onClick={scanHeavySpamPeriod} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
-          Período fuerte (300 bloques)
+          Período fuerte (400 bloques)
         </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Desde el tip (60)
+          Desde el tip (80)
         </button>
         <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Continuar atrás (+80)
+          Continuar atrás (+100)
         </button>
         <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Aleatorio
@@ -385,6 +395,9 @@ export default function Home() {
         </button>
         <button onClick={scanAlphaPoolLike} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#fff3e0' }}>
           AlphaPool
+        </button>
+        <button onClick={clearHistory} style={{ padding: '8px 16px', marginLeft: '8px', background: '#ffcccc' }}>
+          Limpiar historial
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '110px' }} />
@@ -417,7 +430,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Ahora solo muestra candidatos con muchos pubkeys falsos. El error “no BPUB-like” significa que no es un reveal real.
+        Solo transacciones con witness. El error “no witness data” significa que no es SegWit/BPUB.
       </p>
     </div>
   );
