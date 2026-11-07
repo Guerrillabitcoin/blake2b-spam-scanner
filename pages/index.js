@@ -54,14 +54,79 @@ export default function Home() {
     }
   };
 
-  const isSuspect = (tx) => {
-    const size = tx.size || 0;
-    const weight = tx.weight || 0;
-    const vin = tx.vin?.length || 0;
-    const vout = tx.vout?.length || 0;
-    // Detecta transacciones grandes o con muchos outputs/inputs
-    // (posibles BPUB, consolidaciones, o data embedding)
-    return size > 1500 || weight > 6000 || vout > 12 || vin > 15;
+  // Análisis más profundo de una tx completa
+  const analyzeTx = async (txid, height) => {
+    try {
+      const res = await fetch(`${API_BASE}/tx/${txid}`);
+      if (!res.ok) return null;
+      const tx = await res.json();
+
+      let maxWitnessItems = 0;
+      let totalWitnessBytes = 0;
+      let hasMultisigLike = false;
+      let pubkeyPushes = 0;
+      let hasOpDrop = false;
+
+      for (const vin of tx.vin || []) {
+        if (vin.witness && Array.isArray(vin.witness)) {
+          maxWitnessItems = Math.max(maxWitnessItems, vin.witness.length);
+          for (const w of vin.witness) {
+            if (typeof w === 'string') totalWitnessBytes += w.length / 2;
+          }
+        }
+        const asm = (vin.inner_witnessscript_asm || vin.scriptsig_asm || '') + '';
+        if (asm.includes('OP_CHECKMULTISIG') || asm.includes('OP_CHECKMULTISIGVERIFY')) {
+          hasMultisigLike = true;
+        }
+        if (asm.includes('OP_DROP')) hasOpDrop = true;
+        // Contar pushes de ~33 bytes (pubkeys comprimidas)
+        const matches = asm.match(/OP_PUSHBYTES_33/g);
+        if (matches) pubkeyPushes += matches.length;
+      }
+
+      const size = tx.size || 0;
+      const weight = tx.weight || 0;
+      const vinCount = tx.vin?.length || 0;
+      const voutCount = tx.vout?.length || 0;
+
+      let type = null;
+      let score = 0;
+
+      if (pubkeyPushes >= 8 || hasMultisigLike) {
+        type = 'bpub_or_multisig_data';
+        score += 3;
+      }
+      if (totalWitnessBytes > 2000 || maxWitnessItems > 5) {
+        type = type || 'large_witness';
+        score += 2;
+      }
+      if (hasOpDrop) {
+        type = type || 'op_drop_data';
+        score += 1;
+      }
+      if (size > 2500 || weight > 10000 || voutCount > 20 || vinCount > 30) {
+        type = type || 'large_or_many_io';
+        score += 1;
+      }
+
+      if (score >= 2 || type) {
+        return {
+          height,
+          txid,
+          size,
+          weight,
+          vin: vinCount,
+          vout: voutCount,
+          type: type || 'possible_data',
+          pubkeyPushes,
+          witnessBytes: Math.round(totalWitnessBytes),
+          foundAt: Date.now(),
+        };
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
   };
 
   const scanRange = async (from, to) => {
@@ -80,28 +145,28 @@ export default function Home() {
           const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
           const txs = await txsRes.json();
 
-          for (const tx of txs || []) {
-            if (isSuspect(tx)) {
-              results.push({
-                height: h,
-                txid: tx.txid,
-                size: tx.size,
-                weight: tx.weight,
-                vin: tx.vin?.length || 0,
-                vout: tx.vout?.length || 0,
-                type: 'possible_data_or_large',
-                foundAt: Date.now(),
-              });
-            }
+          // Pre-filtrar candidatos baratos
+          const candidates = (txs || []).filter(tx => {
+            const s = tx.size || 0;
+            const w = tx.weight || 0;
+            const vin = tx.vin?.length || 0;
+            const vout = tx.vout?.length || 0;
+            return s > 1200 || w > 5000 || vout > 8 || vin > 10;
+          });
+
+          for (const tx of candidates) {
+            const analyzed = await analyzeTx(tx.txid, h);
+            if (analyzed) results.push(analyzed);
+            await new Promise(r => setTimeout(r, 80));
           }
         } catch (e) {
           console.warn('Error bloque', h, e);
         }
-        await new Promise(r => setTimeout(r, 120));
+        await new Promise(r => setTimeout(r, 100));
       }
       setScanned(results);
       await saveToHistory(results);
-      setProgress(`Terminado. Encontradas ${results.length} transacciones sospechosas. Guardadas en historial compartido.`);
+      setProgress(`Terminado. Encontradas ${results.length} transacciones con posible data. Guardadas en historial compartido.`);
     } catch (e) {
       setError('Error escaneando: ' + e.message);
     }
@@ -115,14 +180,14 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 40) {
-      setError('Máximo 40 bloques por escaneo');
+    if (end - start > 30) {
+      setError('Máximo 30 bloques por escaneo');
       return;
     }
     scanRange(start, end);
   };
 
-  const scanLast = async (n = 20) => {
+  const scanLast = async (n = 15) => {
     setLoading(true);
     try {
       const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
@@ -138,15 +203,15 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Galería compartida de transacciones con posible data embedding en la cadena BLAKE2b. Historial visible para todos los visitantes.</p>
+      <p>Detecta BPUB, multisig con muchas claves, witness grande y otros métodos de data embedding. Historial compartido.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear bloques</h3>
-        <button onClick={() => scanLast(10)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 10
+        <button onClick={() => scanLast(8)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Últimos 8
         </button>
-        <button onClick={() => scanLast(25)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 25
+        <button onClick={() => scanLast(15)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Últimos 15
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -178,7 +243,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Detección heurística de transacciones grandes o con muchos inputs/outputs (posibles BPUB, OP_RETURN grande, witness data, etc.). Historial compartido vía Vercel Blob.
+        Heurísticas: multisig con muchas pubkeys (BPUB), witness grande, OP_DROP, transacciones grandes. Historial compartido vía Vercel Blob.
       </p>
     </div>
   );
@@ -199,6 +264,8 @@ function SpamList({ items }) {
           <div style={{ fontSize: '0.78em', color: '#555' }}>
             Size: {item.size} · Weight: {item.weight}<br />
             Inputs: {item.vin} · Outputs: {item.vout}
+            {item.pubkeyPushes ? <><br />Pubkeys: {item.pubkeyPushes}</> : null}
+            {item.witnessBytes ? <><br />Witness ~{item.witnessBytes} bytes</> : null}
           </div>
           <div style={{ marginTop: '10px' }}>
             <a href={`https://bpub.bitfiles.io/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc', marginRight: '10px' }}>
