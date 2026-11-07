@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 
 const API_BASE = 'https://mempool.guide/api';
-const HISTORY_KEY = 'blake2b_spam_history';
 
 export default function Home() {
   const [blocks, setBlocks] = useState([]);
@@ -14,22 +13,32 @@ export default function Home() {
   const [progress, setProgress] = useState('');
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(HISTORY_KEY);
-      if (saved) setHistory(JSON.parse(saved));
-    } catch (e) {}
+    loadHistory();
     fetchRecentBlocks();
   }, []);
 
-  const saveToHistory = (items) => {
+  const loadHistory = async () => {
+    try {
+      const r = await fetch('/api/history');
+      const data = await r.json();
+      setHistory(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const saveToHistory = async (items) => {
     if (!items.length) return;
-    setHistory(prev => {
-      const existing = new Set(prev.map(i => i.txid));
-      const fresh = items.filter(i => !existing.has(i.txid));
-      const next = [...fresh, ...prev].slice(0, 500);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-      return next;
-    });
+    try {
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(items),
+      });
+      await loadHistory();
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const fetchRecentBlocks = async () => {
@@ -50,7 +59,9 @@ export default function Home() {
     const weight = tx.weight || 0;
     const vin = tx.vin?.length || 0;
     const vout = tx.vout?.length || 0;
-    return size > 1800 || weight > 7000 || vout > 15 || vin > 20;
+    // Detecta transacciones grandes o con muchos outputs/inputs
+    // (posibles BPUB, consolidaciones, o data embedding)
+    return size > 1500 || weight > 6000 || vout > 12 || vin > 15;
   };
 
   const scanRange = async (from, to) => {
@@ -78,7 +89,7 @@ export default function Home() {
                 weight: tx.weight,
                 vin: tx.vin?.length || 0,
                 vout: tx.vout?.length || 0,
-                type: 'possible_spam_or_large',
+                type: 'possible_data_or_large',
                 foundAt: Date.now(),
               });
             }
@@ -86,11 +97,11 @@ export default function Home() {
         } catch (e) {
           console.warn('Error bloque', h, e);
         }
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 120));
       }
       setScanned(results);
-      saveToHistory(results);
-      setProgress(`Terminado. Encontradas ${results.length} transacciones sospechosas.`);
+      await saveToHistory(results);
+      setProgress(`Terminado. Encontradas ${results.length} transacciones sospechosas. Guardadas en historial compartido.`);
     } catch (e) {
       setError('Error escaneando: ' + e.message);
     }
@@ -104,8 +115,8 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 50) {
-      setError('Máximo 50 bloques por escaneo para no saturar');
+    if (end - start > 40) {
+      setError('Máximo 40 bloques por escaneo');
       return;
     }
     scanRange(start, end);
@@ -124,23 +135,18 @@ export default function Home() {
     }
   };
 
-  const clearHistory = () => {
-    localStorage.removeItem(HISTORY_KEY);
-    setHistory([]);
-  };
-
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      <h1>BLAKE2b Spam Scanner</h1>
-      <p>Escanea bloques de la cadena BLAKE2b buscando transacciones grandes / posible spam. Los resultados se guardan en el historial del navegador.</p>
+      <h1>BLAKE2b Spam / Data Scanner</h1>
+      <p>Galería compartida de transacciones con posible data embedding en la cadena BLAKE2b. Historial visible para todos los visitantes.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
-        <h3>Escanear</h3>
-        <button onClick={() => scanLast(15)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 15 bloques
+        <h3>Escanear bloques</h3>
+        <button onClick={() => scanLast(10)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Últimos 10
         </button>
-        <button onClick={() => scanLast(30)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 30 bloques
+        <button onClick={() => scanLast(25)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Últimos 25
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -155,18 +161,11 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado en el último escaneo. Prueba escanear.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado en el último escaneo.</p>}
       <SpamList items={scanned} />
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '40px' }}>
-        <h2>Historial guardado ({history.length})</h2>
-        {history.length > 0 && (
-          <button onClick={clearHistory} style={{ padding: '6px 12px', fontSize: '0.85em' }}>
-            Borrar historial
-          </button>
-        )}
-      </div>
-      {history.length === 0 && <p>El historial está vacío. Los spam encontrados se guardarán aquí automáticamente.</p>}
+      <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
+      {history.length === 0 && <p>El historial está vacío. Escanea bloques para añadir hallazgos.</p>}
       <SpamList items={history} />
 
       <h2 style={{ marginTop: '40px' }}>Últimos bloques</h2>
@@ -179,7 +178,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Nota: Detección heurística (transacciones grandes o con muchos outputs/inputs). El historial se guarda en tu navegador (localStorage). Las imágenes se ven en bitfiles.
+        Detección heurística de transacciones grandes o con muchos inputs/outputs (posibles BPUB, OP_RETURN grande, witness data, etc.). Historial compartido vía Vercel Blob.
       </p>
     </div>
   );
