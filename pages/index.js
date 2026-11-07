@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'https://mempool.guide/api';
 
+// Simple in-memory cache for extracted previews
+const previewCache = new Map();
+
 export default function Home() {
   const [blocks, setBlocks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -91,11 +94,13 @@ export default function Home() {
       let type = null;
       let category = 'spam';
       let score = 0;
+      let strong = false;
 
       if (vinCount >= 15 || pubkeyPushes >= 5 || hasMultisigLike) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
         score += 4;
+        strong = true;
       }
       if (totalWitnessBytes > 1200 || maxWitnessItems > 3) {
         type = type || 'large_witness';
@@ -123,6 +128,7 @@ export default function Home() {
           category,
           pubkeyPushes,
           witnessBytes: Math.round(totalWitnessBytes),
+          strong,
           foundAt: Date.now(),
         };
       }
@@ -156,12 +162,12 @@ export default function Home() {
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 40));
+          await new Promise(r => setTimeout(r, 30));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 40));
     }
     return { results, nextFrom: end - 1 };
   };
@@ -246,7 +252,7 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Escaneo regresivo + extracción de BPUB en el navegador. Previsualizaciones directas.</p>
+      <p>Escaneo regresivo + extracción automática de BPUB. Previsualizaciones rápidas.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
@@ -290,7 +296,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Previsualizaciones extraídas en el navegador con @bitfiles/bpub. NSFW se muestra borroso.
+        Candidatos fuertes se extraen automáticamente. Cache local para más velocidad.
       </p>
     </div>
   );
@@ -305,6 +311,7 @@ function SpamList({ items }) {
           <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>
             Bloque {item.height} — {item.type}
             {item.category === 'image_or_file' && <span style={{ color: '#c00', marginLeft: '6px' }}>(posible media)</span>}
+            {item.strong && <span style={{ color: '#0a0', marginLeft: '6px', fontSize: '0.8em' }}>★</span>}
           </div>
           <div style={{ fontSize: '0.82em', wordBreak: 'break-all', marginBottom: '6px' }}>
             TX: {item.txid}
@@ -323,39 +330,54 @@ function SpamList({ items }) {
               mempool.guide
             </a>
           </div>
-          <Preview txid={item.txid} category={item.category} />
+          <Preview txid={item.txid} strong={item.strong} />
         </div>
       ))}
     </div>
   );
 }
 
-function Preview({ txid, category }) {
+function Preview({ txid, strong }) {
   const [status, setStatus] = useState('idle');
   const [url, setUrl] = useState(null);
   const [meta, setMeta] = useState(null);
   const [blur, setBlur] = useState(true);
 
+  useEffect(() => {
+    if (strong) {
+      extract();
+    }
+  }, [txid, strong]);
+
   const extract = async () => {
+    if (previewCache.has(txid)) {
+      const cached = previewCache.get(txid);
+      setUrl(cached.url);
+      setMeta(cached.meta);
+      setStatus('ok');
+      return;
+    }
     setStatus('loading');
     try {
       const { recoverFromTxid } = await import('@bitfiles/bpub');
       const result = await recoverFromTxid(txid, { chain: 'btcb2' });
       if (!result || !result.content) {
         setStatus('no-content');
+        previewCache.set(txid, { url: null, meta: null });
         return;
       }
       const mime = result.meta?.mime || 'application/octet-stream';
       const blob = new Blob([result.content], { type: mime });
       const objectUrl = URL.createObjectURL(blob);
+      const data = { url: objectUrl, meta: result.meta };
+      previewCache.set(txid, data);
       setUrl(objectUrl);
       setMeta(result.meta);
       setStatus('ok');
-      // Simple NSFW heuristic: blur if large image or unknown
-      if (mime.startsWith('image/') && result.content.length > 50000) setBlur(true);
     } catch (e) {
       console.warn(e);
       setStatus('error');
+      previewCache.set(txid, { url: null, meta: null });
     }
   };
 
@@ -366,9 +388,9 @@ function Preview({ txid, category }) {
       </button>
     );
   }
-  if (status === 'loading') return <div style={{ marginTop: '10px', fontSize: '0.85em' }}>Extrayendo...</div>;
+  if (status === 'loading') return <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>Extrayendo...</div>;
   if (status === 'error' || status === 'no-content') {
-    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>No se pudo extraer BPUB</div>;
+    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>No es BPUB o no se pudo extraer</div>;
   }
 
   const isImage = meta?.mime?.startsWith('image/');
@@ -396,7 +418,7 @@ function Preview({ txid, category }) {
       )}
       {!isImage && !isVideo && (
         <a href={url} download={meta?.filename || 'file'} style={{ fontSize: '0.85em' }}>
-          Descargar archivo ({meta?.mime || 'unknown'})
+          Descargar ({meta?.mime || 'archivo'})
         </a>
       )}
       {blur && isImage && <div style={{ fontSize: '0.7em', color: '#888' }}>Click para desenfocar</div>}
