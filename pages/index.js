@@ -54,7 +54,6 @@ export default function Home() {
     }
   };
 
-  // Análisis más profundo de una tx completa
   const analyzeTx = async (txid, height) => {
     try {
       const res = await fetch(`${API_BASE}/tx/${txid}`);
@@ -75,11 +74,8 @@ export default function Home() {
           }
         }
         const asm = (vin.inner_witnessscript_asm || vin.scriptsig_asm || '') + '';
-        if (asm.includes('OP_CHECKMULTISIG') || asm.includes('OP_CHECKMULTISIGVERIFY')) {
-          hasMultisigLike = true;
-        }
+        if (asm.includes('OP_CHECKMULTISIG') || asm.includes('OP_CHECKMULTISIGVERIFY')) hasMultisigLike = true;
         if (asm.includes('OP_DROP')) hasOpDrop = true;
-        // Contar pushes de ~33 bytes (pubkeys comprimidas)
         const matches = asm.match(/OP_PUSHBYTES_33/g);
         if (matches) pubkeyPushes += matches.length;
       }
@@ -90,22 +86,25 @@ export default function Home() {
       const voutCount = tx.vout?.length || 0;
 
       let type = null;
+      let category = 'spam';
       let score = 0;
 
-      if (pubkeyPushes >= 8 || hasMultisigLike) {
-        type = 'bpub_or_multisig_data';
+      if (pubkeyPushes >= 6 || hasMultisigLike) {
+        type = 'bpub_or_multisig';
+        category = 'image_or_file';
         score += 3;
       }
-      if (totalWitnessBytes > 2000 || maxWitnessItems > 5) {
+      if (totalWitnessBytes > 1500 || maxWitnessItems > 4) {
         type = type || 'large_witness';
+        category = 'image_or_file';
         score += 2;
       }
       if (hasOpDrop) {
-        type = type || 'op_drop_data';
+        type = type || 'op_drop';
         score += 1;
       }
-      if (size > 2500 || weight > 10000 || voutCount > 20 || vinCount > 30) {
-        type = type || 'large_or_many_io';
+      if (size > 2000 || weight > 8000 || voutCount > 15 || vinCount > 25) {
+        type = type || 'large_tx';
         score += 1;
       }
 
@@ -118,6 +117,7 @@ export default function Home() {
           vin: vinCount,
           vout: voutCount,
           type: type || 'possible_data',
+          category,
           pubkeyPushes,
           witnessBytes: Math.round(totalWitnessBytes),
           foundAt: Date.now(),
@@ -130,45 +130,62 @@ export default function Home() {
   };
 
   const scanRange = async (from, to) => {
+    const results = [];
+    for (let h = from; h <= to; h++) {
+      setProgress(`Escaneando bloque ${h} (${h - from + 1}/${to - from + 1})...`);
+      try {
+        const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
+        const hash = (await blockRes.text()).trim();
+        if (!hash || hash.length < 64) continue;
+
+        const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
+        const txs = await txsRes.json();
+
+        const candidates = (txs || []).filter(tx => {
+          const s = tx.size || 0;
+          const w = tx.weight || 0;
+          const vin = tx.vin?.length || 0;
+          const vout = tx.vout?.length || 0;
+          return s > 1000 || w > 4000 || vout > 6 || vin > 8;
+        });
+
+        for (const tx of candidates) {
+          const analyzed = await analyzeTx(tx.txid, h);
+          if (analyzed) results.push(analyzed);
+          await new Promise(r => setTimeout(r, 60));
+        }
+      } catch (e) {
+        console.warn('Error bloque', h, e);
+      }
+      await new Promise(r => setTimeout(r, 80));
+    }
+    return results;
+  };
+
+  const progressiveScan = async () => {
     setLoading(true);
     setError('');
-    setProgress('');
-    const results = [];
+    setScanned([]);
     try {
-      for (let h = from; h <= to; h++) {
-        setProgress(`Escaneando bloque ${h} (${h - from + 1}/${to - from + 1})...`);
-        try {
-          const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
-          const hash = (await blockRes.text()).trim();
-          if (!hash || hash.length < 64) continue;
+      const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
+      const tip = await tipRes.json();
+      const height = typeof tip === 'number' ? tip : tip.height || tip;
 
-          const txsRes = await fetch(`${API_BASE}/block/${hash}/txs`);
-          const txs = await txsRes.json();
-
-          // Pre-filtrar candidatos baratos
-          const candidates = (txs || []).filter(tx => {
-            const s = tx.size || 0;
-            const w = tx.weight || 0;
-            const vin = tx.vin?.length || 0;
-            const vout = tx.vout?.length || 0;
-            return s > 1200 || w > 5000 || vout > 8 || vin > 10;
-          });
-
-          for (const tx of candidates) {
-            const analyzed = await analyzeTx(tx.txid, h);
-            if (analyzed) results.push(analyzed);
-            await new Promise(r => setTimeout(r, 80));
-          }
-        } catch (e) {
-          console.warn('Error bloque', h, e);
-        }
-        await new Promise(r => setTimeout(r, 100));
+      let allResults = [];
+      const ranges = [10, 25, 50];
+      for (const n of ranges) {
+        setProgress(`Barrido progresivo: últimos ${n} bloques...`);
+        const from = height - n + 1;
+        const batch = await scanRange(from, height);
+        allResults = [...batch, ...allResults.filter(r => !batch.find(b => b.txid === r.txid))];
+        setScanned(allResults);
+        if (allResults.length >= 3) break;
       }
-      setScanned(results);
-      await saveToHistory(results);
-      setProgress(`Terminado. Encontradas ${results.length} transacciones con posible data. Guardadas en historial compartido.`);
+
+      await saveToHistory(allResults);
+      setProgress(`Terminado. Encontradas ${allResults.length} transacciones. Guardadas en historial compartido.`);
     } catch (e) {
-      setError('Error escaneando: ' + e.message);
+      setError('Error: ' + e.message);
     }
     setLoading(false);
   };
@@ -180,38 +197,31 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 30) {
-      setError('Máximo 30 bloques por escaneo');
+    if (end - start > 60) {
+      setError('Máximo 60 bloques');
       return;
     }
-    scanRange(start, end);
-  };
-
-  const scanLast = async (n = 15) => {
     setLoading(true);
-    try {
-      const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
-      const tip = await tipRes.json();
-      const height = typeof tip === 'number' ? tip : tip.height || tip;
-      await scanRange(height - n + 1, height);
-    } catch (e) {
+    scanRange(start, end).then(async results => {
+      setScanned(results);
+      await saveToHistory(results);
+      setProgress(`Terminado. ${results.length} hallazgos.`);
+      setLoading(false);
+    }).catch(e => {
       setError(e.message);
       setLoading(false);
-    }
+    });
   };
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Detecta BPUB, multisig con muchas claves, witness grande y otros métodos de data embedding. Historial compartido.</p>
+      <p>Detecta BPUB, imágenes, vídeos y data embedding. Historial compartido. Barrido progresivo automático.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
-        <h3>Escanear bloques</h3>
-        <button onClick={() => scanLast(8)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 8
-        </button>
-        <button onClick={() => scanLast(15)} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Últimos 15
+        <h3>Escanear</h3>
+        <button onClick={progressiveScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Barrido progresivo (10→25→50)
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -226,11 +236,11 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado en el último escaneo.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba el barrido progresivo.</p>}
       <SpamList items={scanned} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
-      {history.length === 0 && <p>El historial está vacío. Escanea bloques para añadir hallazgos.</p>}
+      {history.length === 0 && <p>El historial está vacío.</p>}
       <SpamList items={history} />
 
       <h2 style={{ marginTop: '40px' }}>Últimos bloques</h2>
@@ -243,7 +253,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Heurísticas: multisig con muchas pubkeys (BPUB), witness grande, OP_DROP, transacciones grandes. Historial compartido vía Vercel Blob.
+        Previsualizaciones abren bitfiles. Historial compartido. Barrido progresivo amplía el rango si encuentra poco.
       </p>
     </div>
   );
@@ -257,6 +267,7 @@ function SpamList({ items }) {
         <div key={item.txid + i} style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '12px', background: '#fff' }}>
           <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>
             Bloque {item.height} — {item.type}
+            {item.category === 'image_or_file' && <span style={{ color: '#c00', marginLeft: '6px' }}>(posible media)</span>}
           </div>
           <div style={{ fontSize: '0.82em', wordBreak: 'break-all', marginBottom: '6px' }}>
             TX: {item.txid}
@@ -268,14 +279,17 @@ function SpamList({ items }) {
             {item.witnessBytes ? <><br />Witness ~{item.witnessBytes} bytes</> : null}
           </div>
           <div style={{ marginTop: '10px' }}>
-            <a href={`https://bpub.bitfiles.io/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc', marginRight: '10px' }}>
+            <a href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc', marginRight: '10px' }}>
               Ver en bitfiles
             </a>
             <a href={`https://mempool.guide/tx/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
               Explorer
             </a>
           </div>
-          <div
+          <a
+            href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`}
+            target="_blank"
+            rel="noreferrer"
             style={{
               marginTop: '10px',
               height: '100px',
@@ -284,11 +298,13 @@ function SpamList({ items }) {
               alignItems: 'center',
               justifyContent: 'center',
               borderRadius: '4px',
-              filter: 'blur(5px)',
+              filter: 'blur(4px)',
+              textDecoration: 'none',
+              color: '#333',
             }}
           >
-            <span style={{ filter: 'none', color: '#666', fontSize: '0.8em' }}>[blur - posible spam]</span>
-          </div>
+            <span style={{ filter: 'none', fontSize: '0.8em' }}>[Click para previsualizar en bitfiles]</span>
+          </a>
         </div>
       ))}
     </div>
