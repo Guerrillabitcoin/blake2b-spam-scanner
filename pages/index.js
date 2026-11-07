@@ -180,7 +180,6 @@ export default function Home() {
       const tip = tipRef.current;
       setProgress('Buscando bloques de pools que aceptan spam (AlphaPool y similares)...');
       const results = [];
-      // Scan last ~80 blocks looking for AlphaPool-style coinbase
       for (let h = tip; h > tip - 80 && h > 961640; h--) {
         setProgress(`Revisando bloque ${h} para pools...`);
         try {
@@ -195,7 +194,6 @@ export default function Home() {
           const coinbaseAsm = coinbase.vin?.[0]?.scriptsig_asm || '';
           const isAlpha = coinbaseAsm.includes('AlphaPool') || coinbaseHex.toLowerCase().includes('alphapool');
           if (isAlpha) {
-            // Scan this block for spam candidates
             const candidates = txs.slice(1).filter(tx => (tx.vin?.length || 0) >= 12 || (tx.size || 0) > 1000);
             for (const tx of candidates) {
               const analyzed = await analyzeTx(tx.txid, h);
@@ -314,13 +312,33 @@ export default function Home() {
     });
   };
 
+  const testSample = () => {
+    const sample = {
+      height: 0,
+      txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e',
+      size: 0,
+      weight: 0,
+      vin: 0,
+      vout: 0,
+      type: 'sample_bpub',
+      category: 'image_or_file',
+      strong: true,
+      foundAt: Date.now(),
+    };
+    setScanned([sample]);
+    setProgress('Cargado txid de ejemplo de BPUB. Pulsa Extraer.');
+  };
+
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Rangos más altos, aleatorios y bloques de pools que aceptan spam. Lo visual extraído se guarda en historial.</p>
+      <p>Extracción corregida (fetch propio del hex). Prueba el botón de ejemplo.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
+        <button onClick={testSample} style={{ padding: '8px 16px', marginRight: '8px', background: '#e0ffe0' }}>
+          Probar txid de ejemplo
+        </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Empezar desde el tip (30)
         </button>
@@ -350,7 +368,7 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba zona conocida, aleatorio o AlphaPool.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba el txid de ejemplo o zona conocida.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
@@ -367,7 +385,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Cuando extraes algo visual se guarda automáticamente en el historial compartido.
+        Extracción usa hex propio de mempool.guide. Si el ejemplo funciona, el resto también.
       </p>
     </div>
   );
@@ -414,6 +432,7 @@ function Preview({ txid, strong, item, onVisualFound }) {
   const [url, setUrl] = useState(null);
   const [meta, setMeta] = useState(null);
   const [blur, setBlur] = useState(true);
+  const [errMsg, setErrMsg] = useState('');
   const savedRef = useRef(false);
 
   useEffect(() => {
@@ -435,9 +454,16 @@ function Preview({ txid, strong, item, onVisualFound }) {
       return;
     }
     setStatus('loading');
+    setErrMsg('');
     try {
-      const { recoverFromTxid } = await import('@bitfiles/bpub');
-      const result = await recoverFromTxid(txid, { chain: 'btcb2' });
+      // Fetch hex ourselves from mempool.guide
+      const hexRes = await fetch(`${API_BASE}/tx/${txid}/hex`);
+      if (!hexRes.ok) throw new Error('No se pudo obtener el hex');
+      const rawHex = (await hexRes.text()).trim();
+      if (!rawHex || rawHex.length < 100) throw new Error('Hex inválido');
+
+      const { recoverFromRawTransaction } = await import('@bitfiles/bpub');
+      const result = await recoverFromRawTransaction(rawHex);
       if (!result || !result.content) {
         setStatus('no-content');
         previewCache.set(txid, { url: null, meta: null });
@@ -457,6 +483,7 @@ function Preview({ txid, strong, item, onVisualFound }) {
       }
     } catch (e) {
       console.warn(e);
+      setErrMsg(e.message || 'Error');
       setStatus('error');
       previewCache.set(txid, { url: null, meta: null });
     }
@@ -471,7 +498,7 @@ function Preview({ txid, strong, item, onVisualFound }) {
   }
   if (status === 'loading') return <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>Extrayendo...</div>;
   if (status === 'error' || status === 'no-content') {
-    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>No es BPUB o no se pudo extraer</div>;
+    return <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#888' }}>{errMsg || 'No es BPUB o no se pudo extraer'}</div>;
   }
 
   const isImage = meta?.mime?.startsWith('image/');
