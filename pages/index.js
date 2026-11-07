@@ -4,6 +4,13 @@ const API_BASE = 'https://mempool.guide/api';
 
 const previewCache = new Map();
 
+const KNOWN_TXIDS = [
+  { txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e', label: 'Sample oficial' },
+  { txid: 'cc3d2e62b3c81de7aa93757fe0a6a25c826483746cd232c26234f7d8af05309f', label: 'Whitepaper PDF' },
+  { txid: '184b36d61fa94f2abdfe4bb0201236ce7eab9c4206880a59195f8f62ce919189', label: 'Archivo grande' },
+  { txid: '18e195667353270576915a18324d3875fc92acd5600d5c7954b683c34dbd1b70', label: 'Otro archivo' },
+];
+
 export default function Home() {
   const [blocks, setBlocks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -99,19 +106,18 @@ export default function Home() {
       let score = 0;
       let strong = false;
 
-      // Stricter: real BPUB reveals have many fake 33-byte pubkeys in multisig scripts
-      if (pubkeyPushes >= 12 || (hasMultisigLike && pubkeyPushes >= 6) || multisigScripts >= 3) {
+      if (pubkeyPushes >= 10 || (hasMultisigLike && pubkeyPushes >= 5) || multisigScripts >= 2) {
         type = 'bpub_reveal_candidate';
         category = 'image_or_file';
         score += 5;
         strong = true;
-      } else if (vinCount >= 18 && totalWitnessBytes > 2000) {
+      } else if (vinCount >= 15 && totalWitnessBytes > 1500) {
         type = 'possible_bpub';
         category = 'image_or_file';
         score += 3;
         strong = true;
       }
-      if (totalWitnessBytes > 1500 || maxWitnessItems > 4) {
+      if (totalWitnessBytes > 1200 || maxWitnessItems > 3) {
         type = type || 'large_witness';
         category = 'image_or_file';
         score += 1;
@@ -120,12 +126,12 @@ export default function Home() {
         type = type || 'op_drop';
         score += 1;
       }
-      if (size > 2500 || weight > 9000) {
+      if (size > 2000 || weight > 8000) {
         type = type || 'large_tx';
         score += 1;
       }
 
-      if (score >= 3 || type) {
+      if (score >= 2 || type) {
         return {
           height,
           txid,
@@ -163,20 +169,54 @@ export default function Home() {
         const candidates = (txs || []).filter(tx => {
           const s = tx.size || 0;
           const vin = tx.vin?.length || 0;
-          return s > 1200 || vin >= 14;
+          return s > 1000 || vin >= 12;
         });
 
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 20));
+          await new Promise(r => setTimeout(r, 15));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 25));
+      await new Promise(r => setTimeout(r, 20));
     }
     return { results, nextFrom: end - 1 };
+  };
+
+  const scanHeavySpamPeriod = async () => {
+    setLoading(true);
+    setError('');
+    setScanned([]);
+    try {
+      setProgress('Escaneando período fuerte de spam (963343 – 970000, ~3 semanas)...');
+      const { results } = await scanBackwards(970000, 200);
+      setScanned(results);
+      await saveToHistory(results);
+      setProgress(`Período fuerte escaneado. ${results.length} hallazgos.`);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  const loadKnownTxids = () => {
+    const samples = KNOWN_TXIDS.map(k => ({
+      height: 0,
+      txid: k.txid,
+      size: 0,
+      weight: 0,
+      vin: 0,
+      vout: 0,
+      type: 'known_' + k.label,
+      category: 'image_or_file',
+      pubkeyPushes: 99,
+      strong: true,
+      foundAt: Date.now(),
+    }));
+    setScanned(samples);
+    setProgress('Cargados txids históricos conocidos. Pulsa Extraer en cada uno.');
   };
 
   const scanAlphaPoolLike = async () => {
@@ -286,7 +326,7 @@ export default function Home() {
     setScanned([]);
     try {
       setProgress('Escaneando zona conocida de spam (alrededor del bloque 963343)...');
-      const { results } = await scanBackwards(963500, 120);
+      const { results } = await scanBackwards(963600, 150);
       setScanned(results);
       await saveToHistory(results);
       setProgress(`Zona conocida escaneada. ${results.length} hallazgos.`);
@@ -319,33 +359,18 @@ export default function Home() {
     });
   };
 
-  const testSample = () => {
-    const sample = {
-      height: 0,
-      txid: 'c6c3710169c5d8516cb45a70d2278fdadb04f21c82840703238ae428bbf6197e',
-      size: 0,
-      weight: 0,
-      vin: 26,
-      vout: 0,
-      type: 'sample_bpub',
-      category: 'image_or_file',
-      pubkeyPushes: 99,
-      strong: true,
-      foundAt: Date.now(),
-    };
-    setScanned([sample]);
-    setProgress('Cargado txid de ejemplo de BPUB. Pulsa Extraer.');
-  };
-
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Detección más estricta (muchos pubkeys falsos). El ejemplo funciona, ahora buscamos mejores candidatos.</p>
+      <p>Período fuerte de spam: bloques 963343–970000 (septiembre 2026). Mitad de cada bloque era un archivo BPUB.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
-        <button onClick={testSample} style={{ padding: '8px 16px', marginRight: '8px', background: '#e0ffe0' }}>
-          Probar txid de ejemplo
+        <button onClick={loadKnownTxids} style={{ padding: '8px 16px', marginRight: '8px', background: '#e0ffe0' }}>
+          Cargar txids conocidos
+        </button>
+        <button onClick={scanHeavySpamPeriod} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
+          Período fuerte (963343–970000)
         </button>
         <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Empezar desde el tip (40)
@@ -356,11 +381,11 @@ export default function Home() {
         <button onClick={randomScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
           Escaneo aleatorio
         </button>
-        <button onClick={scanKnownSpam} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#ffe0e0' }}>
-          Zona conocida (~963343)
+        <button onClick={scanKnownSpam} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Zona ~963343
         </button>
         <button onClick={scanAlphaPoolLike} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px', background: '#fff3e0' }}>
-          Bloques AlphaPool / pools
+          Bloques AlphaPool
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -376,7 +401,7 @@ export default function Home() {
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba zona conocida o AlphaPool.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba “Cargar txids conocidos” o “Período fuerte”.</p>}
       <SpamList items={scanned} onVisualFound={saveToHistory} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
@@ -393,7 +418,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Solo se marca como fuerte (★) si tiene muchos pubkeys falsos típicos de BPUB. El ejemplo funciona.
+        Período fuerte: septiembre 2026, bloques 963343–970000. Mitad de cada bloque era un archivo BPUB.
       </p>
     </div>
   );
