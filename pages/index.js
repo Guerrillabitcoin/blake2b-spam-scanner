@@ -253,7 +253,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Previsualizaciones abren bitfiles. Historial compartido. Barrido progresivo amplía el rango si encuentra poco.
+        Enlaces: Kilombino explorer (principal), mempool.guide y bitfiles (opcional). Historial compartido.
       </p>
     </div>
   );
@@ -278,32 +278,35 @@ function SpamList({ items }) {
             {item.pubkeyPushes ? <><br />Pubkeys: {item.pubkeyPushes}</> : null}
             {item.witnessBytes ? <><br />Witness ~{item.witnessBytes} bytes</> : null}
           </div>
-          <div style={{ marginTop: '10px' }}>
-            <a href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc', marginRight: '10px' }}>
-              Ver en bitfiles
+          <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            <a href={`https://mempool.kilombino.com/tx/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
+              Kilombino
             </a>
             <a href={`https://mempool.guide/tx/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#0066cc' }}>
-              Explorer
+              mempool.guide
+            </a>
+            <a href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`} target="_blank" rel="noreferrer" style={{ color: '#888' }}>
+              bitfiles
             </a>
           </div>
           <a
-            href={`https://bpub.bitfiles.io/#btcb2/${item.txid}`}
+            href={`https://mempool.kilombino.com/tx/${item.txid}`}
             target="_blank"
             rel="noreferrer"
             style={{
               marginTop: '10px',
-              height: '100px',
-              background: '#eee',
+              height: '80px',
+              background: '#f0f0f0',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               borderRadius: '4px',
-              filter: 'blur(4px)',
               textDecoration: 'none',
               color: '#333',
+              fontSize: '0.85em',
             }}
           >
-            <span style={{ filter: 'none', fontSize: '0.8em' }}>[Click para previsualizar en bitfiles]</span>
+            Ver en explorer de Kilombino
           </a>
         </div>
       ))}
