@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'https://mempool.guide/api';
 
@@ -11,6 +11,8 @@ export default function Home() {
   const [scanned, setScanned] = useState([]);
   const [history, setHistory] = useState([]);
   const [progress, setProgress] = useState('');
+  const [lowestScanned, setLowestScanned] = useState(null);
+  const tipRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -46,6 +48,7 @@ export default function Home() {
       const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
       const tip = await tipRes.json();
       const height = typeof tip === 'number' ? tip : tip.height || tip;
+      tipRef.current = height;
       const res = await fetch(`${API_BASE}/blocks/${height}`);
       const data = await res.json();
       setBlocks(Array.isArray(data) ? data.slice(0, 8) : []);
@@ -129,10 +132,12 @@ export default function Home() {
     }
   };
 
-  const scanRange = async (from, to) => {
+  // Escanea hacia atrás (de alto a bajo)
+  const scanBackwards = async (fromHeight, count) => {
     const results = [];
-    for (let h = from; h <= to; h++) {
-      setProgress(`Escaneando bloque ${h} (${h - from + 1}/${to - from + 1})...`);
+    const end = Math.max(1, fromHeight - count + 1);
+    for (let h = fromHeight; h >= end; h--) {
+      setProgress(`Escaneando hacia atrás: bloque ${h} (${fromHeight - h + 1}/${count})...`);
       try {
         const blockRes = await fetch(`${API_BASE}/block-height/${h}`);
         const hash = (await blockRes.text()).trim();
@@ -152,40 +157,50 @@ export default function Home() {
         for (const tx of candidates) {
           const analyzed = await analyzeTx(tx.txid, h);
           if (analyzed) results.push(analyzed);
-          await new Promise(r => setTimeout(r, 60));
+          await new Promise(r => setTimeout(r, 50));
         }
       } catch (e) {
         console.warn('Error bloque', h, e);
       }
-      await new Promise(r => setTimeout(r, 80));
+      await new Promise(r => setTimeout(r, 60));
     }
-    return results;
+    return { results, nextFrom: end - 1 };
   };
 
-  const progressiveScan = async () => {
+  const startScan = async () => {
     setLoading(true);
     setError('');
     setScanned([]);
     try {
-      const tipRes = await fetch(`${API_BASE}/blocks/tip/height`);
-      const tip = await tipRes.json();
-      const height = typeof tip === 'number' ? tip : tip.height || tip;
-
-      let allResults = [];
-      const ranges = [10, 25, 50];
-      for (const n of ranges) {
-        setProgress(`Barrido progresivo: últimos ${n} bloques...`);
-        const from = height - n + 1;
-        const batch = await scanRange(from, height);
-        allResults = [...batch, ...allResults.filter(r => !batch.find(b => b.txid === r.txid))];
-        setScanned(allResults);
-        if (allResults.length >= 3) break;
-      }
-
-      await saveToHistory(allResults);
-      setProgress(`Terminado. Encontradas ${allResults.length} transacciones. Guardadas en historial compartido.`);
+      if (!tipRef.current) await fetchRecentBlocks();
+      const tip = tipRef.current;
+      const { results, nextFrom } = await scanBackwards(tip, 20);
+      setScanned(results);
+      setLowestScanned(nextFrom);
+      await saveToHistory(results);
+      setProgress(`Escaneados últimos 20 bloques. ${results.length} hallazgos. Puedes continuar hacia atrás.`);
     } catch (e) {
-      setError('Error: ' + e.message);
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  const continueScan = async () => {
+    if (!lowestScanned || lowestScanned < 1) return;
+    setLoading(true);
+    setError('');
+    try {
+      const { results, nextFrom } = await scanBackwards(lowestScanned, 25);
+      setScanned(prev => {
+        const existing = new Set(prev.map(i => i.txid));
+        const fresh = results.filter(r => !existing.has(r.txid));
+        return [...fresh, ...prev];
+      });
+      setLowestScanned(nextFrom);
+      await saveToHistory(results);
+      setProgress(`Continuado 25 bloques más. +${results.length} hallazgos. Siguiente desde ${nextFrom}.`);
+    } catch (e) {
+      setError(e.message);
     }
     setLoading(false);
   };
@@ -197,15 +212,15 @@ export default function Home() {
       setError('Rango inválido');
       return;
     }
-    if (end - start > 60) {
-      setError('Máximo 60 bloques');
+    if (end - start > 80) {
+      setError('Máximo 80 bloques');
       return;
     }
     setLoading(true);
-    scanRange(start, end).then(async results => {
+    scanBackwards(end, end - start + 1).then(async ({ results }) => {
       setScanned(results);
       await saveToHistory(results);
-      setProgress(`Terminado. ${results.length} hallazgos.`);
+      setProgress(`Rango escaneado. ${results.length} hallazgos.`);
       setLoading(false);
     }).catch(e => {
       setError(e.message);
@@ -216,12 +231,15 @@ export default function Home() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>BLAKE2b Spam / Data Scanner</h1>
-      <p>Detecta BPUB, imágenes, vídeos y data embedding. Historial compartido. Barrido progresivo automático.</p>
+      <p>Escaneo regresivo (hacia atrás). Puedes seguir pulsando para continuar más atrás. Historial compartido.</p>
 
       <div style={{ margin: '20px 0', padding: '15px', background: '#f5f5f5', borderRadius: '8px' }}>
         <h3>Escanear</h3>
-        <button onClick={progressiveScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
-          Barrido progresivo (10→25→50)
+        <button onClick={startScan} disabled={loading} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Empezar desde el tip (20 bloques)
+        </button>
+        <button onClick={continueScan} disabled={loading || !lowestScanned} style={{ padding: '8px 16px', marginRight: '8px' }}>
+          Continuar hacia atrás (+25)
         </button>
         <div style={{ marginTop: '12px' }}>
           <input type="number" placeholder="Altura inicio" value={startHeight} onChange={e => setStartHeight(e.target.value)} style={{ marginRight: '8px', padding: '8px', width: '120px' }} />
@@ -231,12 +249,13 @@ export default function Home() {
           </button>
         </div>
         {progress && <div style={{ marginTop: '10px', fontSize: '0.9em' }}>{progress}</div>}
+        {lowestScanned && <div style={{ marginTop: '6px', fontSize: '0.8em', color: '#666' }}>Último bloque escaneado: {lowestScanned + 1}</div>}
       </div>
 
       {error && <div style={{ color: 'red', margin: '10px 0' }}>{error}</div>}
 
       <h2>Resultados de este escaneo ({scanned.length})</h2>
-      {scanned.length === 0 && !loading && <p>Ningún resultado. Prueba el barrido progresivo.</p>}
+      {scanned.length === 0 && !loading && <p>Ningún resultado. Empieza el escaneo.</p>}
       <SpamList items={scanned} />
 
       <h2 style={{ marginTop: '40px' }}>Historial compartido ({history.length})</h2>
@@ -253,7 +272,7 @@ export default function Home() {
       </ul>
 
       <p style={{ marginTop: '40px', fontSize: '0.8em', color: '#888' }}>
-        Enlaces: Kilombino explorer (principal), mempool.guide y bitfiles (opcional). Historial compartido.
+        Escaneo hacia atrás. Puedes seguir pulsando “Continuar hacia atrás”. Enlaces a Kilombino y mempool.guide.
       </p>
     </div>
   );
